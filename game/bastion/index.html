@@ -323,7 +323,8 @@ canvas{touch-action:none}
 const CELL=48, COLS=32, ROWS=18, W=COLS*CELL, H=ROWS*CELL;
 const MAXW=30, START_GOLD=180, START_LIVES=15, TAU=Math.PI*2;
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
-const DPR=Math.min(2,window.devicePixelRatio||1);
+// A 2× backing canvas exceeds five million pixels; phones render at 1×.
+const DPR=Math.min((matchMedia('(pointer:coarse)').matches||Math.min(innerWidth,innerHeight)<700)?1:2,window.devicePixelRatio||1);
 cv.width=W*DPR; cv.height=H*DPR; ctx.scale(DPR,DPR);
 
 const hexA=(h,a)=>{const n=parseInt(h.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;};
