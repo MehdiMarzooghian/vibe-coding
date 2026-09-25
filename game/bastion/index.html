@@ -261,7 +261,7 @@ canvas{touch-action:none}
 @media(max-width:700px), (max-width:950px) and (orientation:landscape){
   #rail{display:contents}
   #boardWrap{order:0;min-width:0;max-width:none;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
-  #boardWrap canvas{width:960px;max-width:none;touch-action:pan-x pan-y;cursor:pointer;margin-inline:auto}
+  #boardWrap canvas{width:960px;max-width:none;touch-action:none;cursor:pointer;margin-inline:auto}
   body.map-overview #boardWrap{display:flex;align-items:center;justify-content:center}
   #rail section:nth-child(1){order:-2}
   #rail section:nth-child(2){order:2}
@@ -335,7 +335,7 @@ canvas{touch-action:none}
     </div>
   </header>
   <main>
-    <div id="boardTools"><span class="map-tip">DRAG MAP · TAP TOWER</span><div class="zoom-buttons"><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomFit" aria-label="Fit whole map">FIT</button><span id="zoomLabel">100%</span><button id="zoomIn" aria-label="Zoom in">+</button></div></div>
+    <div id="boardTools"><span class="map-tip">DRAG MAP · PINCH TO ZOOM · TAP TOWER</span><div class="zoom-buttons"><button id="zoomFit" aria-label="Fit whole map">FIT</button><span id="zoomLabel">100%</span></div></div>
     <div id="boardWrap">
       <canvas id="cv" width="1536" height="864"></canvas>
       <div id="banner"><b id="bnMain"></b><span id="bnSub"></span></div>
@@ -3060,37 +3060,37 @@ function toLocal(e){
   return {x:(e.clientX-rect.left)*W/rect.width,y:(e.clientY-rect.top)*H/rect.height};
 }
 /* Mobile overview and zoom keep the logical game grid unchanged. */
-const boardWrap=$('boardWrap'),zoomSteps=[1,1.5,2,2.5,3];
-let zoomIx=0,lastMapLandscape=null;
+const boardWrap=$('boardWrap');
+let zoomScale=1,lastMapLandscape=null;
 const mobileMap=()=>innerWidth<=700||(innerWidth<=950&&innerWidth>innerHeight);
-function updateMapZoom(keepCenter=true){
+function updateMapZoom(keepCenter=true,focus=null,anchor=null){
   if(!mobileMap()){
     document.body.classList.remove('map-overview');
     cv.style.removeProperty('width');cv.style.removeProperty('height');
     return;
   }
-  const oldW=cv.getBoundingClientRect().width,oldH=cv.getBoundingClientRect().height;
-  const x=(boardWrap.scrollLeft+boardWrap.clientWidth/2)/Math.max(1,oldW);
-  const y=(boardWrap.scrollTop+boardWrap.clientHeight/2)/Math.max(1,oldH);
+  const oldRect=cv.getBoundingClientRect(),wrapRect=boardWrap.getBoundingClientRect();
+  const fx=focus?.x??wrapRect.left+boardWrap.clientWidth/2;
+  const fy=focus?.y??wrapRect.top+boardWrap.clientHeight/2;
+  const x=anchor?.x??(fx-oldRect.left)/Math.max(1,oldRect.width);
+  const y=anchor?.y??(fy-oldRect.top)/Math.max(1,oldRect.height);
   const fit=Math.max(1,Math.min(boardWrap.clientWidth,boardWrap.clientHeight*W/H));
-  const width=fit*zoomSteps[zoomIx];
-  document.body.classList.toggle('map-overview',zoomIx===0);
+  const width=fit*zoomScale;
+  document.body.classList.toggle('map-overview',zoomScale<=1.001);
   cv.style.width=width+'px';cv.style.height=width*H/W+'px';
-  $('zoomLabel').textContent=Math.round(zoomSteps[zoomIx]*100)+'%';
-  $('zoomOut').disabled=zoomIx===0;$('zoomIn').disabled=zoomIx===zoomSteps.length-1;
+  $('zoomLabel').textContent=Math.round(zoomScale*100)+'%';
   if(keepCenter){
-    boardWrap.scrollLeft=x*width-boardWrap.clientWidth/2;
-    boardWrap.scrollTop=y*width*H/W-boardWrap.clientHeight/2;
+    const newRect=cv.getBoundingClientRect();
+    boardWrap.scrollLeft+=newRect.left+x*width-fx;
+    boardWrap.scrollTop+=newRect.top+y*width*H/W-fy;
   }else{boardWrap.scrollLeft=0;boardWrap.scrollTop=0;}
 }
 function resetMapZoomForOrientation(){
   const landscape=innerWidth>innerHeight;
-  if(landscape!==lastMapLandscape){lastMapLandscape=landscape;zoomIx=landscape?0:3;updateMapZoom(false);}
+  if(landscape!==lastMapLandscape){lastMapLandscape=landscape;zoomScale=landscape?1:2.5;updateMapZoom(false);}
   else updateMapZoom();
 }
-$('zoomOut').onclick=()=>{zoomIx=Math.max(0,zoomIx-1);updateMapZoom();};
-$('zoomIn').onclick=()=>{zoomIx=Math.min(zoomSteps.length-1,zoomIx+1);updateMapZoom();};
-$('zoomFit').onclick=()=>{zoomIx=0;updateMapZoom(false);};
+$('zoomFit').onclick=()=>{zoomScale=1;updateMapZoom(false);};
 window.addEventListener('resize',()=>requestAnimationFrame(resetMapZoomForOrientation));
 requestAnimationFrame(resetMapZoomForOrientation);
 cv.addEventListener('pointermove',e=>{
@@ -3099,8 +3099,20 @@ cv.addEventListener('pointermove',e=>{
   hoverTower=(!placing&&c>=0&&c<COLS&&r>=0&&r<ROWS)?towerAt.get(c+','+r)||null:null;
 },{passive:true});
 cv.addEventListener('pointerleave',()=>{mouse.on=false;hoverTower=null;});
-let boardTouch=null;
-cv.addEventListener('pointercancel',()=>{mouse.on=false;boardTouch=null;});
+const mapTouches=new Map();
+let mapPinch=null,mapGesture=false;
+function beginMapPinch(){
+  const [a,b]=[...mapTouches.values()];
+  const rect=cv.getBoundingClientRect(),midX=(a.x+b.x)/2,midY=(a.y+b.y)/2;
+  mapPinch={distance:Math.hypot(a.x-b.x,a.y-b.y)||1,scale:zoomScale,
+    anchor:{x:(midX-rect.left)/rect.width,y:(midY-rect.top)/rect.height}};
+  mapGesture=true;
+}
+cv.addEventListener('pointercancel',e=>{
+  mouse.on=false;mapTouches.delete(e.pointerId);
+  if(mapTouches.size<2)mapPinch=null;
+  if(!mapTouches.size)mapGesture=false;
+});
 function boardPress(e){
   lastTouch=e.pointerType==='touch';
   const cp=$('cancelPlace');if(cp)cp.hidden=!(placing&&lastTouch);
@@ -3128,15 +3140,44 @@ function boardPress(e){
 }
 cv.addEventListener('pointerdown',e=>{
   if(e.pointerType==='touch'){
-    boardTouch={id:e.pointerId,x:e.clientX,y:e.clientY};
+    cv.setPointerCapture(e.pointerId);
+    mapTouches.set(e.pointerId,{x:e.clientX,y:e.clientY,startX:e.clientX,startY:e.clientY,
+      scrollX:boardWrap.scrollLeft,scrollY:boardWrap.scrollTop,moved:false});
+    if(mapTouches.size===2)beginMapPinch();
     return;
   }
   boardPress(e);
 });
+cv.addEventListener('pointermove',e=>{
+  if(e.pointerType!=='touch'||!mapTouches.has(e.pointerId))return;
+  const touch=mapTouches.get(e.pointerId);
+  touch.x=e.clientX;touch.y=e.clientY;
+  if(mapTouches.size>=2){
+    if(!mapPinch)beginMapPinch();
+    const [a,b]=[...mapTouches.values()];
+    const distance=Math.hypot(a.x-b.x,a.y-b.y);
+    zoomScale=Math.max(1,Math.min(3,mapPinch.scale*distance/mapPinch.distance));
+    updateMapZoom(true,{x:(a.x+b.x)/2,y:(a.y+b.y)/2},mapPinch.anchor);
+  }else if(mapTouches.size===1){
+    if(Math.hypot(touch.x-touch.startX,touch.y-touch.startY)>10)touch.moved=true;
+    if(touch.moved){
+      boardWrap.scrollLeft=touch.scrollX-(touch.x-touch.startX);
+      boardWrap.scrollTop=touch.scrollY-(touch.y-touch.startY);
+    }
+  }
+});
 cv.addEventListener('pointerup',e=>{
-  if(e.pointerType!=='touch'||!boardTouch||boardTouch.id!==e.pointerId)return;
-  const start=boardTouch;boardTouch=null;
-  if(Math.hypot(e.clientX-start.x,e.clientY-start.y)<=10)boardPress(e);
+  if(e.pointerType!=='touch'||!mapTouches.has(e.pointerId))return;
+  const touch=mapTouches.get(e.pointerId);
+  const tap=!mapGesture&&!touch.moved&&Math.hypot(e.clientX-touch.startX,e.clientY-touch.startY)<=10;
+  mapTouches.delete(e.pointerId);
+  if(mapTouches.size<2)mapPinch=null;
+  if(mapTouches.size===1){
+    const remaining=[...mapTouches.values()][0];
+    remaining.startX=remaining.x;remaining.startY=remaining.y;
+    remaining.scrollX=boardWrap.scrollLeft;remaining.scrollY=boardWrap.scrollTop;
+  }else if(!mapTouches.size)mapGesture=false;
+  if(tap)boardPress(e);
 });
 cv.addEventListener('contextmenu',e=>{
   e.preventDefault();
